@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package messages;
+
+message BasicResponse { bool success = 1; }
+
+message Empty {}
+
+message MapRequest {
+  bytes key = 1;
+  bytes value = 2;
+  uint32 task_id = 3;
+}
+message MapFinished {
+  uint32 mapper_id = 1;
+  repeated PartitionInfo partitions = 2;
+}
+message PartitionInfo {
+  uint32 partition_id = 1;
+  string location = 2; // e.g. "grpc://ip:port/worker/FetchPartition" or "file://..." or "http://..."
+  uint64 size_bytes = 3;
+}
+
+message ReduceTask {
+  uint32 partition_id = 1;
+  repeated string map_output_locations = 2;
+}
+
+message FetchPartitionRequest {
+  uint32 partition_id = 1;
+  bytes key = 2;
+}
+message FetchPartitionResponse {
+  repeated bytes values = 1;
+}
+
+service Worker {
+  rpc Map(stream MapRequest) returns (BasicResponse);
+
+  rpc FetchPartition(FetchPartitionRequest) returns (FetchPartitionResponse);
+
+  rpc RunReduce(ReduceTask) returns (BasicResponse);
+
+  rpc Halt(Empty) returns (BasicResponse);
+}
+
+service Coordinator {
+  rpc AssignReduce(ReduceTask) returns (BasicResponse);
+  rpc ReportMapFinished(MapFinished) returns (BasicResponse);
+  rpc GetReduceTask(Empty) returns (ReduceTask);
+}
