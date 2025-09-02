@@ -6,11 +6,11 @@ edition = "2024"
 
 [[bin]]
 name = "lab1-server"
-path = "src/server/main.rs"
+path = "src/server/main_coordinator.rs"
 
 [[bin]]
 name = "lab1-worker"
-path = "src/worker/main.rs"
+path = "src/worker/worker.rs"
 
 [dependencies]
 bytes = "1.10.1"

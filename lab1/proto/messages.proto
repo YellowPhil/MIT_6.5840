@@ -7,21 +7,19 @@ message BasicResponse { bool success = 1; }
 message Empty {}
 
 message MapRequest {
-  bytes key = 1;
-  bytes value = 2;
-  uint32 task_id = 3;
+  repeated KV values = 1;
 }
+
 message MapFinished {
   uint32 mapper_id = 1;
   repeated PartitionInfo partitions = 2;
 }
 message PartitionInfo {
   uint32 partition_id = 1;
-  string location = 2; // e.g. "grpc://ip:port/worker/FetchPartition" or "file://..." or "http://..."
-  uint64 size_bytes = 3;
+  optional string location = 2; // e.g. "grpc://ip:port/worker/FetchPartition" or "file://..." or "http://..."
 }
 
-message RenduceRequest {
+message ReduceRequest {
   uint32 partition_id = 1;
   repeated string map_output_locations = 2;
 }
@@ -42,12 +40,12 @@ service Worker {
 
   rpc FetchPartition(FetchPartitionRequest) returns (FetchPartitionResponse);
 
-  rpc RunReduce(RenduceRequest) returns (BasicResponse);
+  rpc RunReduce(ReduceRequest) returns (BasicResponse);
 
   rpc Halt(Empty) returns (BasicResponse);
 }
 
 service Coordinator {
-  rpc AssignReduce(RenduceRequest) returns (BasicResponse);
-  rpc GetReduceTask(Empty) returns (RenduceRequest);
+  rpc AssignReduce(ReduceRequest) returns (BasicResponse);
+  rpc GetReduceTask(Empty) returns (ReduceRequest);
 }

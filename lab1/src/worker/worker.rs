@@ -1,45 +1,45 @@
-use std::pin::Pin;
-
 use dashmap::DashMap;
-use tokio_stream::{StreamExt};
+
+pub mod map_worker;
+pub mod reduce_worker;
+use tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
+use std::io::Read;
 
 mod messages {
     tonic::include_proto!("messages");
 }
 
+use map_worker::MapWorker;
+use reduce_worker::ReduceWorker;
+
 pub struct Worker<Key, Value>
 where
-    Key: std::hash::Hash + std::cmp::Eq + Sized + Send + Sync,
-    Value: Sized + Send + Sync,
+    Key: Send + Sync,
+    Value: Send + Sync,
 {
     id: u32,
-    channel: tonic::transport::Channel,
-    local_map: DashMap<Key, Vec<Value>>,
-    map: MapFn<Key, Value>,
-    reduce: ReduceFn<Key, Value>,
+    // TODO: this design choice may be suboptimal, need some storage abstraction
+    local_cache: DashMap<BucketId, Vec<(Key, Value)>>,
+    map_fn: MapFn<Key, Value>,
+    reduce_fn: ReduceFn<Key, Value>,
 }
 
 pub type MapFn<Key, Value> = Box<dyn Fn(Key, Value) -> Vec<(Key, Value)> + Send + Sync>;
-pub type ReduceFn<Key, Value> = Box<dyn Fn(Vec<(Key, Value)>) -> Value + Send + Sync>;
+pub type ReduceFn<Key, Value> = Box<dyn Fn(Key, Vec<Value>) -> Vec<Value> + Send + Sync>;
+pub type BucketId = u32;
 
 impl<Key, Value> Worker<Key, Value>
 where
-    Key: std::hash::Hash + std::cmp::Eq + Sized + Send + Sync,
-    Value: Sized + Send + Sync,
+    Key: Send + Sync,
+    Value: Send + Sync,
 {
-    pub fn new(
-        id: u32,
-        channel: tonic::transport::Channel,
-        map: MapFn<Key, Value>,
-        reduce: ReduceFn<Key, Value>,
-    ) -> Self {
+    pub fn new(id: u32, map_fn: MapFn<Key, Value>, reduce_fn: ReduceFn<Key, Value>) -> Self {
         Self {
             id,
-            channel,
-            local_map: DashMap::new(),
-            map,
-            reduce,
+            local_cache: DashMap::new(),
+            map_fn,
+            reduce_fn,
         }
     }
 }
@@ -47,27 +47,28 @@ where
 #[tonic::async_trait]
 impl<Key, Value> messages::worker_server::Worker for Worker<Key, Value>
 where
-    Key: std::hash::Hash + std::cmp::Eq + Send + Sync + 'static + prost::Message + Default,
+    Key: Send + Sync + 'static + prost::Message + Default,
+    Key: Into<Box<dyn Read>> + Clone,
     Value: Send + Sync + 'static + prost::Message + Default,
 {
-    async fn map(
+    async fn run_map(
         &self,
         request: Request<Streaming<messages::MapRequest>>,
     ) -> Result<Response<messages::BasicResponse>, Status> {
-        let mut stream = request.into_inner();
+        let mut stream: Streaming<messages::MapRequest> = request.into_inner();
 
         while let Some(request) = stream.next().await {
             let request = request?;
-            let key = Key::decode(request.key.as_slice())
-                .map_err(|_| Status::invalid_argument("Invalid key"))?;
-            let value = Value::decode(request.value.as_slice())
-                .map_err(|_| Status::invalid_argument("Invalid value"))?;
+            
+            // Process each batch of KV pairs in the MapRequest
+            for kv in request.values {
+                let key = Key::decode(kv.key.as_slice())
+                    .map_err(|_| Status::invalid_argument("Invalid key"))?;
+                let value = Value::decode(kv.value.as_slice())
+                    .map_err(|_| Status::invalid_argument("Invalid value"))?;
 
-            for (key, value) in self.map(key, value) {
-                self.local_map
-                    .entry(key)
-                    .or_insert_with(Vec::new)
-                    .push(value);
+                self.map(key, value)
+                    .map_err(|_| Status::internal("Failed to map"))?;
             }
         }
         Ok(Response::new(messages::BasicResponse { success: true }))
@@ -78,41 +79,38 @@ where
         request: Request<messages::FetchPartitionRequest>,
     ) -> Result<Response<messages::FetchPartitionResponse>, Status> {
         let request = request.into_inner();
-        let key = Key::decode(request.key.as_slice())
-            .map_err(|_| Status::invalid_argument("Invalid key"))?;
-
         let values = self
-            .local_map
-            .get(&key)
+            .local_cache
+            .get(&request.partition_id)
             .ok_or(Status::not_found("Key not found"))?
             .iter()
-            .map(|value| value.encode_to_vec())
+            .map(|(key, value)| messages::Kv {
+                key: key.encode_to_vec(),
+                value: value.encode_to_vec(),
+            })
             .collect::<Vec<_>>();
 
         Ok(Response::new(messages::FetchPartitionResponse { values }))
     }
-    async fn run_reduce(
-        &self,
-        request: Request<messages::ReduceTask>,
-    ) -> Result<Response<messages::BasicResponse>, Status> {
-        todo!();
-        Ok(Response::new(messages::BasicResponse { success: true }))
-    }
+
     async fn halt(
         &self,
-        request: Request<messages::Empty>,
+        _request: Request<messages::Empty>,
     ) -> Result<Response<messages::BasicResponse>, Status> {
-        todo!();
+        //TODO: Implement graceful shutdown
+        Ok(Response::new(messages::BasicResponse { success: true }))
+    }
+    async fn run_reduce(
+        &self,
+        request: Request<messages::ReduceRequest>,
+    ) -> Result<Response<messages::BasicResponse>, Status> {
+        let request = request.into_inner();
+        self.reduce(request.partition_id, request.map_output_locations)
+            .await
+            .map_err(|_| Status::internal("Failed to reduce"))?;
+        tracing::info!("Reduced partition: {}", request.partition_id);
         Ok(Response::new(messages::BasicResponse { success: true }))
     }
 }
 
-impl<Key, Value> Worker<Key, Value>
-where
-    Key: std::hash::Hash + std::cmp::Eq + Sized + Send + Sync,
-    Value: Sized + Send + Sync,
-{
-    fn map(&self, key: Key, value: Value) -> Vec<(Key, Value)> {
-        (self.map)(key, value)
-    }
-}
+fn main() {}
