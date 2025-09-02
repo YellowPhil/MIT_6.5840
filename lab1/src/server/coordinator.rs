@@ -1,10 +1,9 @@
 use std::{collections::VecDeque, io::Read, sync::Arc};
 
-use dashmap::DashMap;
 use eyre::{Result, WrapErr};
 use tokio::{sync::Mutex, task::JoinSet};
 use tokio_stream::iter;
-use tonic::Request;
+use tonic::{Request, transport::Channel};
 
 mod messages {
     tonic::include_proto!("messages");
@@ -12,19 +11,20 @@ mod messages {
 
 const BATCH_SIZE: usize = 1000;
 
-type WorkerId = usize;
-type BucketId = usize;
-
 pub struct Coordinator {
     mappers: Vec<WorkerInfo>,
     reducers: Vec<WorkerInfo>,
-    map_reducer: DashMap<WorkerId, BucketId>,
+}
+
+enum WorkerType {
+    Mapper(messages::map_worker_client::MapWorkerClient<Channel>),
+    Reducer(messages::reduce_worker_client::ReduceWorkerClient<Channel>),
 }
 
 struct WorkerInfo {
     id: u32,
-    connection: messages::worker_client::WorkerClient<tonic::transport::Channel>,
     location: String,
+    worker_type: WorkerType,
 }
 
 impl Coordinator {
@@ -32,33 +32,43 @@ impl Coordinator {
         Self {
             mappers: Vec::new(),
             reducers: Vec::new(),
-            map_reducer: DashMap::new(),
         }
     }
     pub async fn add_mapper(&mut self, id: u32, location: String) -> Result<()> {
         tracing::info!("Adding mapper: {}", location);
-        let connection = messages::worker_client::WorkerClient::connect(location.clone())
+        let connection = messages::map_worker_client::MapWorkerClient::connect(location.clone())
             .await
             .wrap_err("Failed to connect to mapper")?;
 
         self.mappers.push(WorkerInfo {
             id,
-            connection,
             location,
+            worker_type: WorkerType::Mapper(connection),
         });
         Ok(())
     }
 
     pub async fn add_reducer(&mut self, id: u32, location: String) -> Result<()> {
         tracing::info!("Adding reducer: {}", location);
-        let connection = messages::worker_client::WorkerClient::connect(location.clone())
-            .await
-            .wrap_err("Failed to connect to reducer")?;
+        let connection =
+            messages::reduce_worker_client::ReduceWorkerClient::connect(location.clone())
+                .await
+                .wrap_err("Failed to connect to reducer")?;
         self.reducers.push(WorkerInfo {
             id,
-            connection,
             location,
+            worker_type: WorkerType::Reducer(connection),
         });
+        for mapper in &mut self.mappers {
+            match &mut mapper.worker_type {
+                WorkerType::Mapper(connection) => {
+                    connection
+                        .notify_new_reducer(Request::new(messages::Empty {}))
+                        .await?;
+                }
+                WorkerType::Reducer(_) => continue,
+            }
+        }
         Ok(())
     }
     pub async fn map<Key, Value>(&mut self, values: Vec<(Key, Value)>) -> Result<()>
@@ -78,20 +88,24 @@ impl Coordinator {
         let work_queue = Arc::new(Mutex::new(work_queue));
 
         for i in 0..self.mappers.len() {
-            let mapper_connection = self.mappers[i].connection.clone();
             let work_queue_clone = work_queue.clone();
+            let connection = match &self.mappers[i].worker_type {
+                WorkerType::Mapper(connection) => connection.clone(),
+                WorkerType::Reducer(_) => {
+                    return Err(eyre::eyre!("Reducer cannot process map requests"));
+                }
+            };
 
-            join_set.spawn(async move {
-                Self::worker_loop(mapper_connection, work_queue_clone, i).await
-            });
+            join_set.spawn(async move { Self::worker_loop(connection, work_queue_clone, i).await });
         }
 
         join_set.join_all().await;
+        self.assign_reduce().await?;
         Ok(())
     }
 
     async fn worker_loop<Key, Value>(
-        connection: messages::worker_client::WorkerClient<tonic::transport::Channel>,
+        connection: messages::map_worker_client::MapWorkerClient<Channel>,
         work_queue: Arc<Mutex<VecDeque<Vec<(Key, Value)>>>>,
         worker_id: usize,
     ) -> Result<()>
@@ -109,7 +123,7 @@ impl Coordinator {
                 break;
             };
 
-            match Self::process_mapper_batch(connection.clone(), values.clone(), worker_id).await {
+            match Self::process_mapper_batch(connection.clone(), &values, worker_id).await {
                 Ok(()) => {
                     tracing::info!("Worker {} successfully processed batch", worker_id);
                 }
@@ -129,8 +143,8 @@ impl Coordinator {
     }
 
     async fn process_mapper_batch<Key, Value>(
-        mut connection: messages::worker_client::WorkerClient<tonic::transport::Channel>,
-        values: Vec<(Key, Value)>,
+        mut connection: messages::map_worker_client::MapWorkerClient<Channel>,
+        values: &[(Key, Value)],
         mapper_id: usize,
     ) -> Result<()>
     where
@@ -155,6 +169,40 @@ impl Coordinator {
         let request = Request::new(stream);
         connection.run_map(request).await?;
         tracing::info!("Mapped partition: {}", mapper_id);
+        Ok(())
+    }
+
+    async fn assign_reduce(&mut self) -> Result<()> {
+        let mappers = self
+            .mappers
+            .iter()
+            .map(|mapper| mapper.location.clone())
+            .collect::<Vec<_>>();
+
+        for i in 0..self.reducers.len() {
+            let mut connection = match &mut self.reducers[i].worker_type {
+                WorkerType::Reducer(connection) => connection.clone(),
+                WorkerType::Mapper(_) => {
+                    return Err(eyre::eyre!("Mapper cannot process reduce requests"));
+                }
+            };
+            let request = Request::new(messages::ReduceRequest {
+                partition_id: i as u32,
+                map_output_locations: mappers.clone(),
+            });
+            match connection.run_reduce(request).await {
+                Ok(_) => {
+                    tracing::info!("Reducer {} successfully processed partition", i);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Reducer {} failed to process partition: {}. Requeueing work.",
+                        self.reducers[i].id,
+                        e
+                    );
+                }
+            }
+        }
         Ok(())
     }
 }
