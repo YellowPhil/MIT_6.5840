@@ -35,17 +35,13 @@ message FetchPartitionResponse {
   repeated KV values = 1;
 }
 
-service Worker {
+service MapWorker {
   rpc RunMap(stream MapRequest) returns (BasicResponse);
-
+  rpc NotifyNewReducer(Empty) returns (Empty);
   rpc FetchPartition(FetchPartitionRequest) returns (FetchPartitionResponse);
-
-  rpc RunReduce(ReduceRequest) returns (BasicResponse);
-
-  rpc Halt(Empty) returns (BasicResponse);
 }
 
-service Coordinator {
-  rpc AssignReduce(ReduceRequest) returns (BasicResponse);
-  rpc GetReduceTask(Empty) returns (ReduceRequest);
+service ReduceWorker {
+  rpc RunReduce(ReduceRequest) returns (BasicResponse);
+  rpc Halt(Empty) returns (BasicResponse);
 }

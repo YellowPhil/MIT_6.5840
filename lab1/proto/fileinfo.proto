@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package fileinfo;
+
+message FileContents {
+    bytes contents = 1;
+}
+
+message FileName {
+    string name =  1;
+}
+
+message FileInfo {
+    FileName name = 1;
+    FileContents contents = 2;
+}
