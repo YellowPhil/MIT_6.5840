@@ -1,55 +1,60 @@
 use std::io::Read;
-
-use tonic::{Request, async_trait};
+use tonic::{Request, Response, Status, async_trait};
 
 mod messages {
     tonic::include_proto!("messages");
 }
 
-use crate::BucketId;
-
 use super::Worker;
-use messages::worker_client::WorkerClient;
+
+use messages::map_worker_client::MapWorkerClient;
 
 #[async_trait]
-pub trait ReduceWorker<Key, Value>
+impl<Key, Value> messages::reduce_worker_server::ReduceWorker for Worker<Key, Value>
 where
-    Key: Into<Box<dyn Read>> + Clone + Send,
+    Key: Send + Sync + Clone + Into<Box<dyn Read>> + prost::Message + Default + 'static,
+    Value: Send + Sync + prost::Message + Default + 'static,
 {
-    async fn reduce(&self, partition_id: BucketId, connections: Vec<String>) -> eyre::Result<()>;
-}
-
-#[async_trait]
-impl<Key, Value> ReduceWorker<Key, Value> for Worker<Key, Value>
-where
-    Key: Send + Sync + Clone + Into<Box<dyn Read>> + prost::Message + Default,
-    Value: Send + Sync + prost::Message + Default,
-{
-    async fn reduce(&self, partition_id: BucketId, connections: Vec<String>) -> eyre::Result<()> {
-        for connection in connections {
-            let Ok(mut client) = WorkerClient::connect(connection.clone()).await else {
+    async fn run_reduce(
+        &self,
+        request: Request<messages::ReduceRequest>,
+    ) -> Result<Response<messages::BasicResponse>, Status> {
+        let request = request.into_inner();
+        for connection in request.map_output_locations {
+            let Ok(mut client) = MapWorkerClient::connect(connection.clone()).await else {
                 tracing::error!("Failed to connect to worker: {}", connection);
                 continue;
             };
-            let request = Request::new(messages::FetchPartitionRequest {
-                partition_id: partition_id,
+            let fetch_request = Request::new(messages::FetchPartitionRequest {
+                partition_id: request.partition_id,
             });
-            let Ok(response) = client.fetch_partition(request).await else {
+            let Ok(response) = client.fetch_partition(fetch_request).await else {
                 tracing::error!("Failed to fetch partition from worker: {}", connection);
                 continue;
             };
             let kv_pairs = response.into_inner().values;
             for pair in kv_pairs {
                 let key = Key::decode(pair.key.as_slice())
-                    .map_err(|_| eyre::eyre!("Failed to decode key"))?;
+                    .map_err(|_| Status::internal("Failed to decode key"))?;
                 let value = Value::decode(pair.value.as_slice())
-                    .map_err(|_| eyre::eyre!("Failed to decode value"))?;
+                    .map_err(|_| Status::internal("Failed to decode value"))?;
+                // Reduce worker stores reduced values in local cache
                 self.local_cache
-                    .entry(partition_id)
+                    .entry(request.partition_id.clone())
                     .or_insert_with(Vec::new)
                     .push((key, value));
             }
         }
-        Ok(())
+
+        tracing::info!("Reduced partition: {}", request.partition_id);
+        Ok(Response::new(messages::BasicResponse { success: true }))
+    }
+
+    async fn halt(
+        &self,
+        request: Request<messages::Empty>,
+    ) -> Result<Response<messages::BasicResponse>, Status> {
+        todo!();
+        Ok(Response::new(messages::BasicResponse { success: true }))
     }
 }
