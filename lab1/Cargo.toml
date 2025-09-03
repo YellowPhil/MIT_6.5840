@@ -3,29 +3,21 @@ name = "lab1"
 version = "0.1.0"
 edition = "2024"
 
-
 [[bin]]
-name = "lab1-server"
-path = "src/coordinator/main_coordinator.rs"
-
+name = "coordinator"
+path = "src/coordinator_main.rs"
 [[bin]]
-name = "lab1-worker"
-path = "src/worker/worker.rs"
+name = "worker"
+path = "src/worker_main.rs"
+
+[workspace]
+members = ["mapreduce"]
 
 [dependencies]
-bytes = "1.10.1"
-dashmap = "6.1.0"
-eyre = "0.6.12"
-murmur3 = "0.5.2"
+mapreduce = { path = "mapreduce" }
 prost = "0.14.1"
-serde_json = "1.0.143"
-thiserror = "2.0.16"
-tokio = { version = "1.47.1", features = ["rt-multi-thread"] }
-tokio-stream = "0.1.17"
-tonic = "0.14.1"
-tonic-prost = "0.14.1"
-tracing = "0.1.41"
+tokio = { version = "1.47.1", features = ["macros", "rt-multi-thread"] }
+tonic = "0.14.2"
 
 [build-dependencies]
-tonic-prost = "0.14.1"
-tonic-prost-build = "0.14.1"
+prost-build = "0.14.1"

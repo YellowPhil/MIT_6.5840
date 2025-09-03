@@ -1,18 +1,14 @@
 use std::io::Read;
 use tonic::{Request, Response, Status, async_trait};
 
-mod messages {
-    tonic::include_proto!("messages");
-}
-
-use super::Worker;
+use super::{messages};
 
 use messages::map_worker_client::MapWorkerClient;
 
 #[async_trait]
-impl<Key, Value> messages::reduce_worker_server::ReduceWorker for Worker<Key, Value>
+impl<Key, Value> messages::reduce_worker_server::ReduceWorker for crate::worker::ReduceWorker<Key, Value>
 where
-    Key: Send + Sync + Clone + Into<Box<dyn Read>> + prost::Message + Default + 'static,
+    Key: Send + Sync + Clone + prost::Message + Default + 'static,
     Value: Send + Sync + prost::Message + Default + 'static,
 {
     async fn run_reduce(
@@ -54,7 +50,7 @@ where
         &self,
         request: Request<messages::Empty>,
     ) -> Result<Response<messages::BasicResponse>, Status> {
-        todo!();
+        // todo!();
         Ok(Response::new(messages::BasicResponse { success: true }))
     }
 }

@@ -4,17 +4,12 @@ use tokio_stream::StreamExt;
 use murmur3::murmur3_32;
 use tonic::{Request, Response, Status, Streaming};
 
-mod messages {
-    tonic::include_proto!("messages");
-}
-
-use super::Worker;
+use super::{MapWorker, messages};
 
 #[tonic::async_trait]
-impl<Key, Value> messages::map_worker_server::MapWorker for Worker<Key, Value>
+impl<Key, Value> messages::map_worker_server::MapWorker for MapWorker<Key, Value>
 where
-    Key: Send + Sync + 'static + prost::Message + Default,
-    Key: Into<Box<dyn Read>> + Clone,
+    Key: Send + Sync + 'static + prost::Message + Default + Into<Box<dyn Read>> + Clone,
     Value: Send + Sync + 'static + prost::Message + Default,
 {
     async fn run_map(
