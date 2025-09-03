@@ -29,7 +29,7 @@ impl Into<Box<dyn Read + Send + Sync>> for FileName {
     }
 }
 
-pub(crate) struct FileReducerWorker(ReduceWorker<FileName, FileContents>);
+struct FileReducerWorker(ReduceWorker<FileName, FileContents>);
 
 impl FileReducerWorker {
     pub fn new(id: u32, reduce_fn: Box<dyn Fn(FileName, Vec<FileContents>) -> Vec<FileContents> + Send + Sync>) -> Self {
