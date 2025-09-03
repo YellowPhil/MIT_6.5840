@@ -6,7 +6,7 @@ edition = "2024"
 
 [[bin]]
 name = "lab1-server"
-path = "src/server/main_coordinator.rs"
+path = "src/coordinator/main_coordinator.rs"
 
 [[bin]]
 name = "lab1-worker"
@@ -23,7 +23,9 @@ thiserror = "2.0.16"
 tokio = { version = "1.47.1", features = ["rt-multi-thread"] }
 tokio-stream = "0.1.17"
 tonic = "0.14.1"
+tonic-prost = "0.14.1"
 tracing = "0.1.41"
 
 [build-dependencies]
+tonic-prost = "0.14.1"
 tonic-prost-build = "0.14.1"
