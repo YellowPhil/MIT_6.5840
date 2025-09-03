@@ -48,6 +48,7 @@ impl Coordinator {
         Ok(())
     }
 
+    // TODO: if called before adding mappers, we need to notify all mappers about the new reducer
     pub async fn add_reducer(&mut self, id: u32, location: String) -> Result<()> {
         tracing::info!("Adding reducer: {}", location);
         let connection =

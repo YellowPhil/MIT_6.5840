@@ -1,4 +1,5 @@
 use dashmap::DashMap;
+use tonic::transport::Server;
 use std::sync::Mutex;
 
 pub mod map_worker;
@@ -40,4 +41,14 @@ where
         }
     }
 }
-fn main() {}
+fn main() {
+    let worker_type = std::env::args().nth(2).unwrap();
+    let listen_address = std::env::args().nth(1).unwrap();
+    let builder = Server::builder();
+    if worker_type == "map" {
+        let mut builder = builder.add_service(
+            MapWorkerServer::new(Worker::new());
+        )
+    } else if worker_type == "reduce" {
+    }
+}
