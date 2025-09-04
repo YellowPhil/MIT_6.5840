@@ -17,6 +17,7 @@ where
         request: Request<Streaming<messages::MapRequest>>,
     ) -> Result<Response<messages::BasicResponse>, Status> {
         let mut stream: Streaming<messages::MapRequest> = request.into_inner();
+        tracing::info!("Received map request into worker: {}", self.id);
 
         while let Some(request) = stream.next().await {
             let request = request?;
@@ -46,6 +47,7 @@ where
         request: Request<messages::FetchPartitionRequest>,
     ) -> Result<Response<messages::FetchPartitionResponse>, Status> {
         let request = request.into_inner();
+        tracing::info!("Fetching partition: {} from worker: {}", request.partition_id, self.id);
         let values = self
             .local_cache
             .get(&request.partition_id)
@@ -63,6 +65,7 @@ where
         &self,
         request: Request<messages::Empty>,
     ) -> Result<Response<messages::Empty>, Status> {
+        tracing::info!("Notifying about a new reducer to worker: {}", self.id);
         {
             *self.reducers_amount.lock().unwrap() += 1;
         }

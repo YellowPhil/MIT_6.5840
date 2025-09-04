@@ -29,7 +29,7 @@ where
             id,
             local_cache: DashMap::new(),
             map_fn,
-            reducers_amount: Mutex::new(0),
+            reducers_amount: Mutex::new(1),
         }
     }
 }
