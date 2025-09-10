@@ -71,6 +71,8 @@ where
                     .collect::<Vec<_>>()
             })
             .unwrap_or_else(Vec::new);
+        tracing::info!("Removing partition: {} from worker: {}", request.partition_id, self.id);
+        self.local_cache.remove(&request.partition_id);
 
         Ok(Response::new(messages::FetchPartitionResponse { values }))
     }

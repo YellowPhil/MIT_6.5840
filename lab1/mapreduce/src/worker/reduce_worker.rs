@@ -63,6 +63,7 @@ where
             key: key.encode_to_vec(),
             value: value.encode_to_vec(),
         }).collect::<Vec<_>>();
+        self.local_cache.write().await.clear();
         Ok(Response::new(messages::FetchResponse { values }))
     }
 }
