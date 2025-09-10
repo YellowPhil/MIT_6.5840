@@ -3,7 +3,7 @@ syntax = "proto3";
 package fileinfo;
 
 message FileContents {
-    bytes contents = 1;
+    string contents = 1;
 }
 
 message FileName {
