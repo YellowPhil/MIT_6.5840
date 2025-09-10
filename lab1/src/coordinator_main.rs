@@ -47,6 +47,14 @@ async fn main() {
             FileContents {
                 contents: "hello world!!".to_string(),
             },
+        ), 
+        (
+            FileName {
+                name: "another_test.txt".to_string(),
+            },
+            FileContents {
+                contents: "hi there!!".to_string(),
+            },
         )])
         .await
         .unwrap();

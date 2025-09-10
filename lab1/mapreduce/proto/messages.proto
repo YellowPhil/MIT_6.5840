@@ -35,6 +35,10 @@ message FetchPartitionResponse {
   repeated KV values = 1;
 }
 
+message FetchResponse {
+  repeated KV values = 1;
+}
+
 service MapWorker {
   rpc RunMap(stream MapRequest) returns (BasicResponse);
   rpc NotifyNewReducer(Empty) returns (Empty);
@@ -43,5 +47,6 @@ service MapWorker {
 
 service ReduceWorker {
   rpc RunReduce(ReduceRequest) returns (BasicResponse);
+  rpc Fetch(Empty) returns (FetchResponse);
   rpc Halt(Empty) returns (BasicResponse);
 }
