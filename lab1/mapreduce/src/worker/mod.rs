@@ -1,5 +1,6 @@
 use dashmap::DashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use tokio::sync::RwLock;
 
 pub mod map_worker;
 pub mod reduce_worker;
@@ -20,12 +21,12 @@ where
     Key: Send + Sync,
     Value: Send + Sync,
 {
-    pub fn new(id: u32, map_fn: MapFn<Key, Value>) -> Self {
+    pub fn new(id: u32, map_fn: MapFn<Key, Value>, reducers_amount: usize) -> Self {
         Self {
             id,
             local_cache: DashMap::new(),
             map_fn,
-            reducers_amount: Mutex::new(1),
+            reducers_amount: Mutex::new(reducers_amount),
         }
     }
 }
@@ -37,7 +38,7 @@ where
 {
     id: u32,
     // TODO: this design choice may be suboptimal, need some storage abstraction
-    local_cache: DashMap<BucketId, Vec<(Key, Value)>>,
+    local_cache: Arc<RwLock<Vec<(Key, Value)>>>,
     reduce_fn: ReduceFn<Key, Value>,
 }
 
@@ -53,7 +54,7 @@ where
     pub fn new(id: u32, reduce_fn: ReduceFn<Key, Value>) -> Self {
         Self {
             id,
-            local_cache: DashMap::new(),
+            local_cache: Arc::new(RwLock::new(Vec::new())),
             reduce_fn,
         }
     }

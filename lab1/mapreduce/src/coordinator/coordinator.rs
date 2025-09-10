@@ -48,7 +48,6 @@ impl Coordinator {
         Ok(())
     }
 
-    // TODO: if called before adding mappers, we need to notify all mappers about the new reducer
     pub async fn add_reducer(&mut self, id: u32, location: String) -> Result<()> {
         tracing::info!("Adding reducer: {}", location);
         let connection =
@@ -77,7 +76,11 @@ impl Coordinator {
         Key: Into<Box<dyn Read>> + Default + prost::Message + Send + 'static + Clone,
         Value: Default + prost::Message + Send + 'static + Clone,
     {
-        let iter_step = values.len() / self.mappers.len();
+        let iter_step = if values.len() < self.mappers.len() {
+            1
+        } else {
+            values.len() / self.mappers.len()
+        };
 
         let mut work_queue: VecDeque<Vec<(Key, Value)>> = VecDeque::new();
         for i in 0..self.mappers.len() {
@@ -123,6 +126,7 @@ impl Coordinator {
             let Some(values) = batch else {
                 break;
             };
+            tracing::debug!("Worker {} got batch with size: {}", worker_id, values.len());
 
             match Self::process_mapper_batch(connection.clone(), &values, worker_id).await {
                 Ok(()) => {
@@ -163,6 +167,7 @@ impl Coordinator {
                     })
                     .collect(),
             };
+            tracing::debug!("Sending chunk of size {} to mapper: {}", chunk.len(), mapper_id);
             batches.push(batch);
         }
         let stream = iter(batches.into_iter());
@@ -180,8 +185,8 @@ impl Coordinator {
             .map(|mapper| mapper.location.clone())
             .collect::<Vec<_>>();
 
-        for i in 0..self.reducers.len() {
-            let mut connection = match &mut self.reducers[i].worker_type {
+        for (i, reducer) in self.reducers.iter().enumerate() {
+            let mut connection = match &reducer.worker_type {
                 WorkerType::Reducer(connection) => connection.clone(),
                 WorkerType::Mapper(_) => {
                     return Err(eyre::eyre!("Mapper cannot process reduce requests"));
@@ -198,7 +203,7 @@ impl Coordinator {
                 Err(e) => {
                     tracing::warn!(
                         "Reducer {} failed to process partition: {}. Requeueing work.",
-                        self.reducers[i].id,
+                        reducer.id,
                         e
                     );
                 }

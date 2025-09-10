@@ -17,11 +17,18 @@ where
         &self,
         request: Request<Streaming<messages::MapRequest>>,
     ) -> Result<Response<messages::BasicResponse>, Status> {
+
+        if *self.reducers_amount.lock().unwrap() == 0 {
+            tracing::warn!("No reducers are connected, skipping map request");
+            return Err(Status::invalid_argument("No reducers are connected"));
+        }
+
         let mut stream: Streaming<messages::MapRequest> = request.into_inner();
         tracing::info!("Received map request into worker: {}", self.id);
 
         while let Some(request) = stream.next().await {
             let request = request?;
+            tracing::debug!("Received map request chunk of size: {}", request.values.len());
             for kv in request.values {
                 let key = Key::decode(kv.key.as_slice())
                     .map_err(|_| Status::invalid_argument("Invalid key"))?;
@@ -33,6 +40,7 @@ where
                 for (key, value) in (self.map_fn)(key, value) {
                     let reducers_amount = { *self.reducers_amount.lock().unwrap() };
                     // Map worker stores mapped values in local cache at HASH % REDUCERS_AMOUNT index
+                    tracing::debug!("Mapping value to bucket: {}", bucket_id % reducers_amount as u32);
                     self.local_cache
                         .entry(bucket_id % reducers_amount as u32)
                         .or_insert_with(Vec::new)
@@ -40,6 +48,7 @@ where
                 }
             }
         }
+        tracing::info!("Mapping completed for worker: {}", self.id);
         Ok(Response::new(messages::BasicResponse { success: true }))
     }
 
@@ -52,13 +61,16 @@ where
         let values = self
             .local_cache
             .get(&request.partition_id)
-            .ok_or(Status::not_found("Key not found"))?
-            .iter()
-            .map(|(key, value)| messages::Kv {
-                key: key.encode_to_vec(),
-                value: value.encode_to_vec(),
+            .map(|cache_values| {
+                cache_values
+                    .iter()
+                    .map(|(key, value)| messages::Kv {
+                        key: key.encode_to_vec(),
+                        value: value.encode_to_vec(),
+                    })
+                    .collect::<Vec<_>>()
             })
-            .collect::<Vec<_>>();
+            .unwrap_or_else(Vec::new);
 
         Ok(Response::new(messages::FetchPartitionResponse { values }))
     }
