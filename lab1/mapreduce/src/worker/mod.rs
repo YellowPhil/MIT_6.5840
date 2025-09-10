@@ -4,11 +4,7 @@ use std::sync::Mutex;
 pub mod map_worker;
 pub mod reduce_worker;
 
-mod messages {
-    tonic::include_proto!("messages");
-}
-
-pub struct MapWorker<Key, Value>
+pub struct MapWorkerImpl<Key, Value>
 where
     Key: Send + Sync,
     Value: Send + Sync,
@@ -19,7 +15,7 @@ where
     reducers_amount: Mutex<usize>,
 }
 
-impl<Key, Value> MapWorker<Key, Value>
+impl<Key, Value> MapWorkerImpl<Key, Value>
 where
     Key: Send + Sync,
     Value: Send + Sync,
@@ -34,7 +30,7 @@ where
     }
 }
 
-pub struct ReduceWorker<Key, Value>
+pub struct ReduceWorkerImpl<Key, Value>
 where
     Key: Send + Sync,
     Value: Send + Sync,
@@ -49,7 +45,7 @@ pub type MapFn<Key, Value> = Box<dyn Fn(Key, Value) -> Vec<(Key, Value)> + Send 
 pub type ReduceFn<Key, Value> = Box<dyn Fn(Key, Vec<Value>) -> Vec<Value> + Send + Sync>;
 pub type BucketId = u32;
 
-impl<Key, Value> ReduceWorker<Key, Value>
+impl<Key, Value> ReduceWorkerImpl<Key, Value>
 where
     Key: Send + Sync,
     Value: Send + Sync,
