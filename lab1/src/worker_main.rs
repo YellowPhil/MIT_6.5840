@@ -3,9 +3,11 @@ use std::ops::{Deref, DerefMut};
 
 use mapreduce::messages::map_worker_server::MapWorkerServer;
 use mapreduce::messages::reduce_worker_server::ReduceWorkerServer;
-use mapreduce::worker::{MapWorker, ReduceWorker};
+use mapreduce::worker::{MapWorkerImpl, ReduceWorkerImpl};
+use tokio::task::JoinSet;
 use tonic::transport::Server;
 use tonic::{async_trait, Request, Response, Status, Streaming};
+use tracing_subscriber::EnvFilter;
 
 use crate::fileinfo::{FileContents, FileName};
 
@@ -23,91 +25,11 @@ pub mod fileinfo {
 ///
 /// Key will be the file name, value will be it's contents
 /// 
-impl Into<Box<dyn Read + Send + Sync>> for FileName {
-    fn into(self) -> Box<dyn Read + Send + Sync> {
+impl Into<Box<dyn Read + 'static>> for FileName {
+    fn into(self) -> Box<dyn Read + 'static> {
         Box::new(Cursor::new(self.name))
     }
 }
-
-struct FileReducerWorker(ReduceWorker<FileName, FileContents>);
-
-impl FileReducerWorker {
-    pub fn new(id: u32, reduce_fn: Box<dyn Fn(FileName, Vec<FileContents>) -> Vec<FileContents> + Send + Sync>) -> Self {
-        Self(ReduceWorker::new(id, reduce_fn))
-    }
-}
-
-impl Deref for FileReducerWorker {
-    type Target = ReduceWorker<FileName, FileContents>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for FileReducerWorker {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-struct FileMapWorker(MapWorker<FileName, FileContents>);
-
-impl FileMapWorker {
-    pub fn new(id: u32, map_fn: Box<dyn Fn(FileName, FileContents) -> Vec<(FileName, FileContents)> + Send + Sync>) -> Self {
-        Self(MapWorker::new(id, map_fn))
-    }
-}
-
-impl Deref for FileMapWorker {
-    type Target = MapWorker<FileName, FileContents>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-impl DerefMut for FileMapWorker {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-
-#[async_trait]
-impl mapreduce::messages::reduce_worker_server::ReduceWorker for FileReducerWorker {
-    async fn run_reduce(
-        &self,
-        request: Request<mapreduce::messages::ReduceRequest>,
-    ) -> Result<Response<mapreduce::messages::BasicResponse>, Status> {
-        self.run_reduce(request).await
-    }
-    async fn halt(
-        &self,
-        request: Request<mapreduce::messages::Empty>,
-    ) -> Result<Response<mapreduce::messages::BasicResponse>, Status> {
-        self.halt(request).await
-    }
-}
-
-#[async_trait]
-impl mapreduce::messages::map_worker_server::MapWorker for FileMapWorker {
-    async fn run_map(
-        &self,
-        request: Request<Streaming<mapreduce::messages::MapRequest>>,
-    ) -> Result<Response<mapreduce::messages::BasicResponse>, Status> {
-        self.run_map(request).await
-    }
-    async fn notify_new_reducer(
-        &self,
-        request: Request<mapreduce::messages::Empty>,
-    ) -> Result<Response<mapreduce::messages::Empty>, Status> {
-        self.notify_new_reducer(request).await
-    }
-    async fn fetch_partition(
-        &self,
-        request: Request<mapreduce::messages::FetchPartitionRequest>,
-    ) -> Result<Response<mapreduce::messages::FetchPartitionResponse>, Status> {
-        self.fetch_partition(request).await
-    }
-}
-
 
 /// Key will be the file name, value will be it's contents
 fn map_fn(key: FileName, value: FileContents) -> Vec<(FileName, FileContents)> {
@@ -126,13 +48,29 @@ fn reduce_fn(_key: FileName, values: Vec<FileContents>) -> Vec<FileContents> {
 
 #[tokio::main]
 async fn main() {
-    let listen_addr = "127.0.0.1:50051";
-    let reduce_worker = ReduceWorkerServer::new(FileReducerWorker::new(0, Box::new(reduce_fn)));
-    let map_worker = MapWorkerServer::new(FileMapWorker::new(0, Box::new(map_fn)));
-    let _server = Server::builder()
-        .add_service(reduce_worker)
+    tracing_subscriber::fmt()
+        .with_thread_ids(true)
+        .with_target(false)
+        .with_timer(tracing_subscriber::fmt::time::uptime())
+        .with_level(true)
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+
+    let map_listen_addr = "127.0.0.1:50051";
+    let reduce_listen_addr = "127.0.0.1:50052";
+    let reduce_worker = ReduceWorkerServer::new(ReduceWorkerImpl::new(0, Box::new(reduce_fn)));
+    let map_worker = MapWorkerServer::new(MapWorkerImpl::new(0, Box::new(map_fn), 1));
+
+    let map_worker = Server::builder()
         .add_service(map_worker)
-        .serve(listen_addr.parse().unwrap())
-        .await
-        .unwrap();
+        .serve(map_listen_addr.parse().unwrap());
+
+    let reduce_worker = Server::builder()
+        .add_service(reduce_worker)
+        .serve(reduce_listen_addr.parse().unwrap());
+
+    let mut join_set = JoinSet::new();
+    join_set.spawn(async move { map_worker.await.unwrap() });
+    join_set.spawn(async move { reduce_worker.await.unwrap() });
+    join_set.join_all().await;
 }
