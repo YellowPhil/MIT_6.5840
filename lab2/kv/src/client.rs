@@ -13,13 +13,12 @@ pub enum ClientError {
     TimeoutError(Status),
     #[error("Request error: {0}")]
     RequestError(Status),
-    #[error("Invalid key: {0}")]
-    InvalidKey(String),
-    #[error("Invalid value: {0}")]
-    InvalidValue(String),
+    #[error("Invalid request value")]
+    InvalidValue,
     #[error("Value may be changed")]
     ValueMayBeChanged,
-
+    #[error("Version mismatch: {0}")]
+    VersionMismatch(u64),
 }
 
 pub struct Client {
@@ -102,7 +101,7 @@ impl Client {
             version: current_version,
         };
 
-        let mut first_try= true;
+        let mut first_try = true;
 
         for _ in 0..self.retry_count {
             let mut prepared_request = Request::new(request.clone());
@@ -115,30 +114,24 @@ impl Client {
                     self.keys_version.insert(key.to_string(), version);
                     return Ok(version);
                 }
-                Err(status) => match status.code() {
-                    tonic::Code::FailedPrecondition => {
-                        if !first_try {
-                            return Err(ClientError::ValueMayBeChanged);
+
+                Err(status) => {
+                    match status.code() {
+                        tonic::Code::InvalidArgument => {
+                            return Err(ClientError::InvalidValue);
                         }
-                        first_try = false;
-                        // TODO: bytes to u64 is 2.5 times faster
-                        let version = status
-                            .metadata()
-                            .get("version")
-                            .unwrap()
-                            .to_str()
-                            .unwrap()
-                            .parse::<u64>()
-                            .unwrap();
-                        self.keys_version.insert(key.to_string(), version);
-                        request.version = version;
-                        continue;
+                        tonic::Code::FailedPrecondition => {
+                            if !first_try {
+                                return Err(ClientError::ValueMayBeChanged);
+                            }
+                            return Err(ClientError::VersionMismatch(current_version));
+                        }
+                        _ => {
+                            tokio::time::sleep(self.retry_delay).await;
+                        }
                     }
-                    _ => {
-                        tokio::time::sleep(self.retry_delay).await;
-                        continue;
-                    }
-                },
+                    first_try = false;
+                }
             }
         }
 
