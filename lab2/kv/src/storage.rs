@@ -28,12 +28,14 @@ impl storage_rpc::storage_server::Storage for KvStorage {
 
         let mut metadata = MetadataMap::new();
         if let Some(entry) = self.inner.get(&key) {
-            let (value, version) = entry.value();
+            let (_, version) = entry.value();
             tracing::debug!("PUT {key};  request version: {};  stored version: {}", request.version, version);
+
             if *version != request.version {
                 tracing::warn!("PUT {key};  request version: {};  stored version: {}", request.version, version);
+
+                metadata.insert("err_type", "VERSION_MISMATCH".parse().unwrap());
                 metadata.insert("version", version.to_string().parse().unwrap());
-                metadata.insert("data", value.parse().unwrap());
                 return Err(Status::with_metadata(
                     tonic::Code::FailedPrecondition,
                     "Version mismatch",
@@ -43,6 +45,7 @@ impl storage_rpc::storage_server::Storage for KvStorage {
         } else {
             if request.version != 0 {
                 tracing::warn!("PUT {key};  request version: {};  required version: {}", request.version, 0);
+                metadata.insert("err_type", "VERSION_MUST_BE_0".parse().unwrap());
                 metadata.insert("version", "0".parse().unwrap());
                 return Err(Status::with_metadata(
                     tonic::Code::FailedPrecondition,
