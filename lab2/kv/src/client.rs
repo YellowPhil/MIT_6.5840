@@ -95,7 +95,7 @@ impl Client {
                 .value()
         };
 
-        let mut request = storage_rpc::PutRequest {
+        let request = storage_rpc::PutRequest {
             key: key.as_bytes().to_vec(),
             value: value.as_bytes().to_vec(),
             version: current_version,
@@ -179,8 +179,7 @@ impl Client {
 #[cfg(test)]
 mod test_client {
 
-    use rand::{Rng, SeedableRng, rngs::SmallRng};
-    use tokio::task::{JoinHandle, JoinSet};
+    use rand::{Rng};
     use tonic::transport::Server;
 
     use super::*;

@@ -1,7 +1,7 @@
 use kv::{storage_rpc::storage_server::StorageServer, storage::KvStorage};
 use tonic::transport::Server;
 
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter};
 
 #[tokio::main]
 
