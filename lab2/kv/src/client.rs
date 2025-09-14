@@ -17,6 +17,9 @@ pub enum ClientError {
     InvalidKey(String),
     #[error("Invalid value: {0}")]
     InvalidValue(String),
+    #[error("Value may be changed")]
+    ValueMayBeChanged,
+
 }
 
 pub struct Client {
@@ -24,6 +27,7 @@ pub struct Client {
     connection: RwLock<Option<StorageClient<Channel>>>,
     timeout: Duration,
     retry_count: usize,
+    retry_delay: Duration,
     keys_version: DashMap<String, u64>,
 }
 
@@ -34,6 +38,7 @@ impl Default for Client {
             connection: RwLock::new(None),
             timeout: Duration::from_secs(10),
             retry_count: 3,
+            retry_delay: Duration::from_secs(1),
             keys_version: DashMap::new(),
         }
     }
@@ -97,6 +102,8 @@ impl Client {
             version: current_version,
         };
 
+        let mut first_try= true;
+
         for _ in 0..self.retry_count {
             let mut prepared_request = Request::new(request.clone());
             prepared_request.set_timeout(self.timeout);
@@ -110,6 +117,10 @@ impl Client {
                 }
                 Err(status) => match status.code() {
                     tonic::Code::FailedPrecondition => {
+                        if !first_try {
+                            return Err(ClientError::ValueMayBeChanged);
+                        }
+                        first_try = false;
                         // TODO: bytes to u64 is 2.5 times faster
                         let version = status
                             .metadata()
@@ -124,7 +135,8 @@ impl Client {
                         continue;
                     }
                     _ => {
-                        return Err(ClientError::RequestError(status));
+                        tokio::time::sleep(self.retry_delay).await;
+                        continue;
                     }
                 },
             }
@@ -159,6 +171,7 @@ impl Client {
                         return Err(ClientError::RequestError(status));
                     }
                     _ => {
+                        tokio::time::sleep(self.retry_delay).await;
                         continue;
                     }
                 },
