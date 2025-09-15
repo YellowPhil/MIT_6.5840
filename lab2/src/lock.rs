@@ -85,10 +85,13 @@ impl DistributedLock {
         while self.state == LockState::Unlocked {
             let lock_state = match self.client.get(LOCK_KEY).await {
                 Ok(value) => Ok(value),
-                Err(ClientError::RequestError(status)) if status.code() == tonic::Code::NotFound => {
-                    self.client.put(LOCK_KEY, &self.locked_value).await?;
-                    Ok(self.locked_value.to_string())
-                }
+                Err(ClientError::RequestError(status)) if status.code() == tonic::Code::NotFound => Ok({
+                    match self.client.put(LOCK_KEY, &self.locked_value).await {
+                        Ok(_) => Ok(self.locked_value.clone()),
+                        Err(ClientError::VersionMismatch(_)) => continue,
+                        Err(e) => Err(e),
+                    }?
+                }),
                 Err(e) => Err(e),
             }?;
 
