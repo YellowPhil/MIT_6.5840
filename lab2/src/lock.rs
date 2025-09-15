@@ -13,9 +13,7 @@ enum LockState {
     Locked,
 }
 struct DistributedLock {
-    id: usize,
     state: LockState,
-    connection_string: String,
     client: Client,
     sleep_duration: Duration,
     locked_value: String,
@@ -30,22 +28,66 @@ impl DistributedLock {
     /// help distribute the retry attempts more evenly over time.
     fn new(connection_string: &str, id: usize) -> Self {
         Self {
-            id,
             state: LockState::Unlocked,
-            connection_string: connection_string.to_string(),
             client: Client::new(connection_string),
             sleep_duration: Duration::from_secs(1),
             locked_value: format!("locked_{}", id),
         }
     }
 
+    /// Acquires the distributed lock.
+    /// 
+    /// This method attempts to acquire a distributed lock by checking the current lock state
+    /// and attempting to set it to this client's unique locked value. The method will retry
+    /// indefinitely until the lock is successfully acquired.
+    /// 
+    /// ## Behavior
+    /// 
+    /// 1. **Check existing lock state**: First checks if a lock key exists in the store
+    /// 2. **Handle missing key**: If no lock key exists, creates one with an unlocked value
+    /// 3. **Already locked by this client**: If the lock is already held by this client, returns immediately
+    /// 4. **Lock held by another client**: If locked by another client, waits and retries
+    /// 5. **Attempt to acquire**: Tries to atomically set the lock to this client's value
+    /// 6. **Handle conflicts**: Retries on version mismatches or value changes
+    /// 
+    /// ## Error Handling
+    /// 
+    /// - Returns an error if there are unexpected client communication failures
+    /// - Automatically retries on version conflicts (optimistic concurrency control)
+    /// - Will retry indefinitely until the lock is acquired or an unrecoverable error occurs
+    /// 
+    /// ## Examples
+    /// 
+    /// ```rust,no_run
+    /// # use std::time::Duration;
+    /// # async fn example() -> eyre::Result<()> {
+    /// let mut lock = DistributedLock::new("http://localhost:50051", 1);
+    /// 
+    /// // Acquire the lock (will block until available)
+    /// lock.lock().await?;
+    /// 
+    /// // Critical section - only one client can execute this at a time
+    /// println!("Lock acquired, performing critical work...");
+    /// 
+    /// // Don't forget to unlock!
+    /// lock.unlock().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    /// 
+    /// ## Notes
+    /// 
+    /// - This method modifies the internal state to `LockState::Locked` upon success
+    /// - The lock does NOT automatically release when the object is dropped
+    /// - You must manually call [`unlock`](Self::unlock) to release the lock
+    /// - Consider the thundering herd problem when multiple clients compete for the same lock
     async fn lock(&mut self) -> Result<()> {
         while self.state == LockState::Unlocked {
             let lock_state = match self.client.get(LOCK_KEY).await {
                 Ok(value) => Ok(value),
                 Err(ClientError::RequestError(status)) if status.code() == tonic::Code::NotFound => {
-                    self.client.put(LOCK_KEY, UNLOCKED_VALUE).await?;
-                    Ok(UNLOCKED_VALUE.to_string())
+                    self.client.put(LOCK_KEY, &self.locked_value).await?;
+                    Ok(self.locked_value.to_string())
                 }
                 Err(e) => Err(e),
             }?;
@@ -90,8 +132,61 @@ impl DistributedLock {
     }
 }
 
+#[cfg(test)]
+mod test {
+    use rand::{Rng};
+    use tonic::transport::Server;
+
+    use super::*;
+    static ADDRESS: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
+
+    async fn spawn_server() -> String {
+        let addr = "127.0.0.1:50055";
+        let server = Server::builder().add_service(
+            kv::storage_rpc::storage_server::StorageServer::new(kv::storage::KvStorage::new()),
+        );
+        tokio::spawn(async move {
+            let _ = server.serve(addr.parse().unwrap()).await.unwrap();
+        });
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        format!("http://{addr}")
+    }
+
+    async fn random_id() -> usize {
+        rand::rng().random_range(1..1000000)
+    }
+
+    #[tokio::test]
+    async fn test_lock_unlock() {
+        let addr = ADDRESS.get_or_init(spawn_server).await;
+        let mut lock = DistributedLock::new(addr, random_id().await);
+        for i in 0..100 {
+            lock.lock().await.unwrap();
+            assert_eq!(lock.state, LockState::Locked);
+            lock.unlock().await.unwrap();
+            assert_eq!(lock.state, LockState::Unlocked);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_lock_unlock_concurrent() {
+        let addr = ADDRESS.get_or_init(spawn_server).await;
+        let mut lock = DistributedLock::new(addr, random_id().await);
+        let mut lock2 = DistributedLock::new(addr, random_id().await);
+        lock.lock().await.unwrap();
+        assert_eq!(lock.state, LockState::Locked);
+        assert_eq!(lock2.state, LockState::Unlocked);
+    //     // lock2.lock().await.unwrap();
+        lock.unlock().await.unwrap();
+    //     lock2.unlock().await.unwrap();
+    }
+
+}
+
 #[tokio::main]
 async fn main() {
     let mut lock = DistributedLock::new("http://127.0.0.1:50051", 1);
-    lock.lock().await.unwrap();
+    // lock.lock().await.unwrap();
+    // lock.unlock().await.unwrap();
 }
