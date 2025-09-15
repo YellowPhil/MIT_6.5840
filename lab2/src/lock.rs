@@ -26,6 +26,27 @@ impl DistributedLock {
     /// When multiple clients are waiting for the same lock, they may all wake up simultaneously
     /// and compete for the lock, causing unnecessary load on the server. Random sleep intervals
     /// help distribute the retry attempts more evenly over time.
+    ///
+    /// # Arguments
+    ///
+    /// * `connection_string` - The connection string for the key-value store server
+    /// * `id` - A unique identifier for this client instance (used to create a unique lock value)
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use std::time::Duration;
+    /// let lock = DistributedLock::new("http://localhost:50051", 42);
+    /// ```
+    ///
+    /// Create multiple lock instances with different IDs:
+    ///
+    /// ```rust,no_run
+    /// # use std::time::Duration;
+    /// let lock1 = DistributedLock::new("http://localhost:50051", 1);
+    /// let lock2 = DistributedLock::new("http://localhost:50051", 2);
+    /// // Each lock will have a unique locked_value: "locked_1" and "locked_2"
+    /// ```
     fn new(connection_string: &str, id: usize) -> Self {
         Self {
             state: LockState::Unlocked,
