@@ -23,6 +23,7 @@ message AppendEntryRequest {
     uint64 term = 1;
     uint64 leader_id = 2;
     uint64 prev_log_index = 3;
+    // empty in heartbeat
     repeated LogEntry entries = 4;
     uint64 leader_commit = 5;
 }
