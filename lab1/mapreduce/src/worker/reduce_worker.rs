@@ -1,4 +1,4 @@
-use tonic::{Request, Response, Status, async_trait};
+use tonic::{async_trait, Request, Response, Status, Streaming};
 
 use crate::messages;
 
@@ -25,7 +25,7 @@ where
                 partition_id: request.partition_id,
             });
             let Ok(response) = client.fetch_partition(fetch_request).await else {
-                tracing::error!("Failed to fetch partition from worker: {}", connection);
+                tracing::error!("Failed to fetch partition from worker: {}: {}", connection, request.partition_id);
                 continue;
             };
             let kv_pairs = response.into_inner().values;
@@ -36,8 +36,8 @@ where
                     .map_err(|_| Status::internal("Failed to decode value"))?;
                 // Reduce worker stores reduced values in local cache
                 self.local_cache
-                    .entry(request.partition_id.clone())
-                    .or_insert_with(Vec::new)
+                    .write()
+                    .await
                     .push((key, value));
             }
         }
@@ -52,5 +52,18 @@ where
     ) -> Result<Response<messages::BasicResponse>, Status> {
         // todo!();
         Ok(Response::new(messages::BasicResponse { success: true }))
+    }
+    async fn fetch(
+        &self,
+        _request: Request<messages::Empty>,
+    ) -> Result<Response<messages::FetchResponse>, Status> {
+        let values = self.local_cache.read()
+        .await
+        .iter().map(|(key, value)| messages::Kv {
+            key: key.encode_to_vec(),
+            value: value.encode_to_vec(),
+        }).collect::<Vec<_>>();
+        self.local_cache.write().await.clear();
+        Ok(Response::new(messages::FetchResponse { values }))
     }
 }
